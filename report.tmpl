@@ -1,0 +1,3 @@
+{{- range . }}
+FAIL secret  {{ .RuleID }}  {{ if .Commit }}commit {{ printf "%.7s" .Commit }}  {{ end }}{{ .File }}:{{ .StartLine }}  fingerprint {{ .Fingerprint }}
+{{- end }}

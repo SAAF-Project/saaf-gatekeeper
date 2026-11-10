@@ -1,0 +1,6 @@
+- id: saaf-gatekeeper
+  name: SAAF Gatekeeper (secrets and .env files)
+  entry: gatekeeper.sh --staged
+  language: script
+  pass_filenames: false
+  always_run: true

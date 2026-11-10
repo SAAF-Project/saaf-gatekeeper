@@ -1,0 +1,13 @@
+title = "SAAF Gatekeeper"
+
+[extend]
+useDefault = true
+
+# Measured on the 47 SAAF-Project repos (2026-11-10): the only generic-api-key false positives were
+# short words joined by - or / (a localStorage key name, the tag "Claude/Anthropic").
+# Scoped to generic-api-key so provider rules (anthropic-api-key, openai-api-key, ...) still fire.
+[[allowlists]]
+description = "Hyphen- or slash-joined short words are identifiers, not keys"
+targetRules = ["generic-api-key"]
+regexTarget = "secret"
+regexes = ['''^[A-Za-z][A-Za-z0-9]{0,11}([-/][A-Za-z][A-Za-z0-9]{0,11})+$''']
