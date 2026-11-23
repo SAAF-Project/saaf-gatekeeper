@@ -1,5 +1,5 @@
 name: SAAF Gatekeeper
-description: Fails the build when a secret is in any commit on any branch, or when a .env file can be committed.
+description: Reports matched secret patterns in Git history and checks indexed .env handling; inspection errors fail closed.
 inputs:
   path:
     description: Repository to check. Must be a full clone (actions/checkout with fetch-depth 0).
@@ -9,12 +9,12 @@ runs:
   steps:
     - name: Install gitleaks 8.30.1
       shell: bash
+      env:
+        GATEKEEPER_ACTION_PATH: ${{ github.action_path }}
       run: |
-        curl -sSfL -o "$RUNNER_TEMP/gitleaks.tgz" \
-          https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
-        echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $RUNNER_TEMP/gitleaks.tgz" | sha256sum -c -
-        tar -xzf "$RUNNER_TEMP/gitleaks.tgz" -C "$RUNNER_TEMP" gitleaks
-        echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+        set -euo pipefail
+        bash "$GATEKEEPER_ACTION_PATH/scripts/install-gitleaks.sh" "$RUNNER_TEMP/saaf-gitleaks-bin"
+        echo "$RUNNER_TEMP/saaf-gitleaks-bin" >> "$GITHUB_PATH"
     - name: Scan
       shell: bash
       env:

@@ -1,0 +1,23 @@
+name: Offline gatekeeper tests
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install checksum-verified test dependency
+        run: |
+          bash scripts/install-gitleaks.sh "$RUNNER_TEMP/saaf-gitleaks-bin"
+          echo "$RUNNER_TEMP/saaf-gitleaks-bin" >> "$GITHUB_PATH"
+      - name: Syntax and synthetic Git fixtures
+        run: |
+          bash -n gatekeeper.sh demo.sh tests/run.sh scripts/install-gitleaks.sh
+          bash tests/run.sh

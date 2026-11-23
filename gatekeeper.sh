@@ -31,25 +31,31 @@ case "${1:-}" in
   -h|--help) usage; exit 0 ;;
   -*) usage >&2; exit 2 ;;
 esac
+if [ "$#" -gt 1 ]; then usage >&2; exit 2; fi
 repo="${1:-.}"
+
+incomplete() {
+  echo "gatekeeper: incomplete inspection: $*" >&2
+  exit 2
+}
 
 if ! git -C "$repo" rev-parse --git-dir >/dev/null 2>&1; then
   echo "gatekeeper: $repo is not a git repository" >&2
   exit 2
 fi
-repo="$(git -C "$repo" rev-parse --show-toplevel)"
+repo="$(git -C "$repo" rev-parse --show-toplevel)" || incomplete "cannot resolve repository root"
 
 if [ "$mode" = install ]; then
-  hook="$(git -C "$repo" rev-parse --git-path hooks/pre-commit)"
+  hook="$(git -C "$repo" rev-parse --git-path hooks/pre-commit)" || incomplete "cannot resolve hook location"
   case "$hook" in /*) ;; *) hook="$repo/$hook" ;; esac
-  if [ -e "$hook" ]; then
+  if [ -e "$hook" ] || [ -L "$hook" ]; then
     echo "gatekeeper: $hook already exists; add this line to it instead:" >&2
     echo "  \"$here/gatekeeper.sh\" --staged || exit 1" >&2
     exit 2
   fi
-  mkdir -p "$(dirname "$hook")"
-  printf '#!/usr/bin/env bash\nexec "%s/gatekeeper.sh" --staged\n' "$here" > "$hook"
-  chmod +x "$hook"
+  mkdir -p "$(dirname "$hook")" || incomplete "cannot create hooks directory"
+  printf '#!/usr/bin/env bash\nexec %q --staged\n' "$here/gatekeeper.sh" > "$hook" || incomplete "cannot write hook"
+  chmod +x "$hook" || incomplete "cannot mark hook executable"
   echo "gatekeeper: pre-commit hook installed at $hook"
   exit 0
 fi
@@ -59,13 +65,18 @@ if ! command -v gitleaks >/dev/null 2>&1; then
   exit 2
 fi
 
-if [ "$mode" = history ] && [ "$(git -C "$repo" rev-parse --is-shallow-repository)" = true ]; then
-  echo "gatekeeper: $repo is a shallow clone, so its history is incomplete. In CI, check out with fetch-depth: 0." >&2
-  exit 2
+if [ "$mode" = history ]; then
+  shallow="$(git -C "$repo" rev-parse --is-shallow-repository)" || incomplete "cannot determine history completeness"
+  case "$shallow" in
+    false) ;;
+    true) incomplete "shallow clone; check out with fetch-depth: 0" ;;
+    *) incomplete "unknown history completeness" ;;
+  esac
 fi
 
-report="$(mktemp)"
-trap 'rm -f "$report"' EXIT
+report="$(mktemp)" || incomplete "cannot create temporary report"
+policy=""
+trap 'rm -f "$report"; [ -z "$policy" ] || rm -rf "$policy"' EXIT
 found=0
 
 # --redact keeps secret values out of the output; the template leaves out author names and emails.
@@ -77,18 +88,30 @@ else
   gitleaks git "$repo" --log-opts=--all "${gitleaks_args[@]}"
 fi
 rc=$?
-if grep -q '^FAIL' "$report"; then
-  grep '^FAIL' "$report"
+case "$rc" in 0|1) ;; *) incomplete "gitleaks failed (exit $rc)" ;; esac
+reported="$(grep '^FAIL' "$report")"
+report_status=$?
+if [ "$report_status" -eq 0 ]; then
+  [ "$rc" -eq 1 ] || incomplete "gitleaks verdict and report disagree"
+  printf '%s\n' "$reported"
   found=1
+elif [ "$report_status" -ne 1 ]; then
+  incomplete "cannot read gitleaks report"
 elif [ "$rc" -ne 0 ]; then
   echo "gatekeeper: gitleaks failed (exit $rc)" >&2
   exit 2
 fi
 
 if [ "$mode" = staged ]; then
-  candidates="$(git -C "$repo" diff --cached --name-only --diff-filter=ACMR)"
+  candidates="$(git -C "$repo" -c core.quotePath=false diff --cached --name-only --diff-filter=ACMR)" || incomplete "cannot read staged paths"
 else
-  candidates="$(git -C "$repo" ls-files)"
+  candidates="$(git -C "$repo" -c core.quotePath=false ls-files)" || incomplete "cannot read tracked paths"
+fi
+tracked="$(git -C "$repo" -c core.quotePath=false ls-files)" || incomplete "cannot enumerate index"
+# Git quotes paths containing control characters or quotes. Do not turn those
+# line-oriented records into partial or misleading .env checks.
+if printf '%s\n%s\n' "$tracked" "$candidates" | grep -q '^"'; then
+  incomplete "quoted/control-character paths require manual review"
 fi
 while IFS= read -r path; do
   [ -z "$path" ] && continue
@@ -98,20 +121,47 @@ done <<EOF
 $(printf '%s\n' "$candidates" | grep -E "$env_file_re" | grep -v -E "$env_template_re")
 EOF
 
-# Every folder that ships a .env template, or holds a file that loads dotenv, must ignore its .env.
+# Read dotenv usage from the index, not unstaged source. Exit 1 means no matches;
+# any other grep error is missing evidence.
+dotenv_files="$(git -C "$repo" -c core.quotePath=false grep --cached -l -I -E "$env_use_re" -- . ':!*ignore' ':!*.md')"
+rc=$?
+case "$rc" in 0|1) ;; *) incomplete "cannot inspect indexed dotenv usage" ;; esac
+
+# Check the committed/staged ignore policy in isolation. A local/global exclude
+# or an unstaged .gitignore must not conceal what the next checkout would allow.
+policy="$(mktemp -d)" || incomplete "cannot create ignore-policy snapshot"
+policy_git() {
+  env -i PATH="$PATH" HOME="$policy" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C "$policy" "$@"
+}
+policy_git init -q || incomplete "cannot initialize ignore-policy snapshot"
+while IFS= read -r path; do
+  case "$path" in .gitignore|*/.gitignore) ;; *) continue ;; esac
+  entry="$(git -C "$repo" ls-files --stage -- "$path")" || incomplete "cannot read ignore-file mode"
+  case "$entry" in 100644\ *|100755\ *) ;; *) incomplete "ignore policy must be an ordinary indexed file" ;; esac
+  mkdir -p "$policy/$(dirname "$path")" || incomplete "cannot prepare ignore-policy directory"
+  git -C "$repo" show ":$path" > "$policy/$path" || incomplete "cannot read indexed ignore policy"
+done <<EOF
+$tracked
+EOF
+
+# Every folder shipping an env template or indexed dotenv code must ignore .env.
 while IFS= read -r dir; do
   [ -z "$dir" ] && continue
   target=".env"
   [ "$dir" != . ] && target="$dir/.env"
-  if ! git -C "$repo" check-ignore -q --no-index "$target"; then
+  policy_git check-ignore -q --no-index "$target"
+  rc=$?
+  if [ "$rc" -eq 1 ]; then
     echo "FAIL env     $target is not git-ignored, so 'git add .' would commit it"
     found=1
+  elif [ "$rc" -ne 0 ]; then
+    incomplete "cannot evaluate indexed ignore policy"
   fi
 done <<EOF
 $( {
-  git -C "$repo" grep -l -I -E "$env_use_re" -- . ':!*ignore' ':!*.md'
-  git -C "$repo" ls-files | grep -E "$env_template_re"
-} | while IFS= read -r f; do dirname "$f"; done | sort -u)
+  printf '%s\n' "$dotenv_files"
+  printf '%s\n' "$tracked" | grep -E "$env_template_re"
+} | while IFS= read -r f; do [ -z "$f" ] || dirname "$f"; done | sort -u)
 EOF
 
 if [ "$found" -eq 1 ]; then

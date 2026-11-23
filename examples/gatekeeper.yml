@@ -6,10 +6,13 @@ permissions:
   contents: read
 jobs:
   gatekeeper:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: SAAF-Project/saaf-gatekeeper@main
+      # Reviewed baseline. Repin deliberately after reviewing a newer guard.
+      # The candidate CI changes in this PR are not implicitly trusted here.
+      - uses: SAAF-Project/saaf-gatekeeper@3664690a3bc26f49f5d0cb223ba755d76b676c61

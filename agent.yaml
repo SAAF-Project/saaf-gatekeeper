@@ -1,0 +1,35 @@
+# Descriptive metadata; owner and criterion acceptance remain pending.
+name: SAAF Gatekeeper
+repo: SAAF-Project/saaf-gatekeeper
+island: governance
+maturity: building
+confirmed: false
+category: AI governance
+language: Bash
+description: Check selected local Git history or staged changes for Gitleaks secret patterns and inspect indexed dotenv ignore policy before an authorized commit or CI decision.
+tags: [secrets, git, pre-commit, ci]
+depends_on: []
+mandate:
+  purpose: Produce redacted candidate secret and dotenv-policy findings without treating heuristic detection, suppressed findings or incomplete inspection as proof of safety.
+  allowed_tools:
+    - read_selected_git_history_and_index
+    - execute_reviewed_gitleaks_binary_with_redacted_report
+    - inspect_indexed_gitignore_in_temporary_local_snapshot
+    - install_local_hook_only_when_explicitly_requested
+  forbidden_actions:
+    - action: change_own_config
+      rationale: Rules, fingerprints, scanner pins and executable policy require a separate reviewed decision.
+    - action: disclose_secret_values_or_private_findings
+      rationale: Reports contain sensitive repository metadata even when secret values are redacted.
+    - action: rewrite_history_rotate_keys_or_push
+      rationale: Detection does not authorize destructive remediation, provider operations or publication.
+    - action: execute_target_application_or_call_models
+      rationale: The guard invokes Git and the reviewed scanner, never application installs, tests or provider evaluation.
+    - action: approve_suppression_without_review
+      rationale: Ignoring a fingerprint does not revoke a key or prove remediation.
+  trusted_inputs: [explicit_repository_selection, reviewed_guard_and_gitleaks_revision, separately_reviewed_suppression_policy]
+  human_approval_required_for:
+    - hook installation and integration into a shared pipeline
+    - secret remediation and verifying revocation
+    - suppression changes, publishing findings and changing scanner pins
+  evidence_policy: cite_only_given_context
